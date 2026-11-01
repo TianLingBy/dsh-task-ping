@@ -81,6 +81,15 @@ $env:DSH_SMTP_PASS = '你的授权码'
 
 常见错误码：`AUTH pass: 535` 是授权码错（不是登录密码）；`connect timeout` 是本机到 `smtp.qq.com:465` 不通。
 
+## 反馈与交流
+
+用着有问题、想要新功能、或者想说说哪里别扭，都欢迎来群里直接讲：
+
+- **QQ 讨论群**：`1130872026`（DSH通知音效插件讨论群）
+- **一键加群**：<https://qm.qq.com/q/9NMQdv8Emc>
+
+也可以在 GitHub 仓库开 [Issue](https://github.com/TianLingBy/dsh-task-ping/issues) 或 [Discussion](https://github.com/TianLingBy/dsh-task-ping/discussions)。
+
 ## 要求
 
 - Windows（桌面弹窗与提示音）；macOS / Linux 上只有邮件推送生效。
