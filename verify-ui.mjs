@@ -145,10 +145,32 @@ const mailConfig = {
   to: 'someone@qq.com',
 }
 
+// /play 的返回由用例决定：ok / 503 / 409 / reject
+let playBehavior = 'ok'
+const localPlays = []
+
+globalThis.Audio = class {
+  constructor(src) {
+    this.src = src
+    this.volume = 1
+    localPlays.push(this)
+  }
+  play() {
+    return Promise.resolve()
+  }
+}
+
 globalThis.fetch = async (url, options) => {
   fetchCalls.push({ url: String(url), method: (options && options.method) || 'GET', body: options && options.body })
-  if (String(url).endsWith('/push/config')) {
+  const target = String(url)
+  if (target.endsWith('/push/config')) {
     return { ok: true, status: 200, json: async () => ({ ok: true, config: mailConfig, path: 'test' }) }
+  }
+  if (target.endsWith('/dsh-task-notify/play')) {
+    if (playBehavior === 'reject') throw new Error('network down')
+    if (playBehavior === '503') return { ok: false, status: 503, json: async () => ({}) }
+    if (playBehavior === '409') return { ok: false, status: 409, json: async () => ({}) }
+    return { ok: true, status: 204, json: async () => ({}) }
   }
   return { ok: true, status: 200, json: async () => ({ ok: true }) }
 }
@@ -304,19 +326,29 @@ if (mailedWhenOn.length !== 1) {
   console.log('  PASS: 推送 1 次')
 }
 
-console.log('\n[5] 「试听」按钮：恰好一次播放，且用保存的音量')
-storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 80, sound: null }))
-const snap = await inspect(true)
+async function tick() {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
+}
+
+function countPlays() {
+  return fetchCalls.filter((call) => call.url.includes('/dsh-task-notify/play'))
+}
+
+console.log('\n[5] 松滑块：还原的自动试听，恰好一次且用保存的音量')
+storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 45, sound: null }))
+const sliderSnap = await inspect(true)
+factory.__test.resetPlayGuard()
 fetchCalls.length = 0
-const auditionButtons = snap.buttons.filter((n) => n.props && n.props.children === '试听')
-if (auditionButtons.length === 0) {
-  console.log('  FAIL: 没找到「试听」按钮')
+localPlays.length = 0
+const slider = sliderSnap.inputs.find((n) => n.props && n.props.type === 'range')
+if (!slider) {
+  console.log('  FAIL: 没找到音量滑块')
   failed += 1
 } else {
-  auditionButtons[0].props.onClick()
-  await Promise.resolve()
-  await new Promise((resolve) => setImmediate(resolve))
-  const plays = fetchCalls.filter((call) => call.url.includes('/dsh-task-notify/play'))
+  slider.props.onPointerUp({ currentTarget: { value: '45' } })
+  await tick()
+  const plays = countPlays()
   const volumes = plays.map((call) => {
     try {
       return JSON.parse(call.body).volume
@@ -324,37 +356,56 @@ if (auditionButtons.length === 0) {
       return NaN
     }
   })
-  console.log(`  「试听」按钮数=${auditionButtons.length}, 播放请求=${plays.length}, volume=${volumes.join(',')}`)
-  if (plays.length !== 1 || volumes[0] !== 80) {
-    console.log('  FAIL: 期望恰好 1 次播放且 volume=80')
+  console.log(`  播放请求=${plays.length}, volume=${volumes.join(',')}, 页面补播=${localPlays.length}`)
+  if (plays.length !== 1 || volumes[0] !== 45 || localPlays.length !== 0) {
+    console.log('  FAIL: 期望 1 次播放、volume=45、不补播')
     failed += 1
   } else {
-    console.log('  PASS: 一次播放，音量与保存值一致')
+    console.log('  PASS: 一次播放，音量正确，无补播')
   }
 }
 
-console.log('\n[6] 松滑块（onPointerUp）不再触发试听')
-storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 45, sound: null }))
-const sliderSnap = await inspect(true)
+console.log('\n[6] 快速连点 3 次：只播 1 次（单次播放守卫）')
+factory.__test.resetPlayGuard()
 fetchCalls.length = 0
-const slider = sliderSnap.inputs.find((n) => n.props && n.props.type === 'range')
-if (!slider) {
-  console.log('  FAIL: 没找到音量滑块')
+localPlays.length = 0
+for (let i = 0; i < 3; i += 1) slider.props.onPointerUp({ currentTarget: { value: '45' } })
+await tick()
+console.log(`  3 次操作 -> 播放请求=${countPlays().length}, 页面补播=${localPlays.length}`)
+if (countPlays().length !== 1) {
+  console.log('  FAIL: 期望仍只有 1 次播放')
   failed += 1
 } else {
-  slider.props.onPointerUp({ currentTarget: { value: '45' } })
-  slider.props.onKeyUp({ currentTarget: { value: '45' } })
-  await Promise.resolve()
-  await new Promise((resolve) => setImmediate(resolve))
-  const plays = fetchCalls.filter((call) => call.url.includes('/dsh-task-notify/play'))
-  console.log(`  松手/松键后播放请求=${plays.length}`)
-  if (plays.length !== 0) {
-    console.log('  FAIL: 滑块仍然自动试听')
+  console.log('  PASS: 未叠加')
+}
+
+async function hostStatusCase(label, behavior, expectLocal) {
+  factory.__test.resetPlayGuard()
+  fetchCalls.length = 0
+  localPlays.length = 0
+  playBehavior = behavior
+  storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 60, sound: null }))
+  factory.__test.show('session-1', '任务', {}, null)
+  await tick()
+  const plays = countPlays().length
+  playBehavior = 'ok'
+  console.log(`  ${label}: Host 请求=${plays}, 页面补播=${localPlays.length}`)
+  if (plays !== 1 || localPlays.length !== expectLocal) {
+    console.log(`  FAIL: 期望 Host 请求 1 次、页面补播 ${expectLocal} 次`)
     failed += 1
   } else {
-    console.log('  PASS: 不再自动试听')
+    console.log('  PASS')
   }
 }
+
+console.log('\n[7] Host 返回 503（正在播）：页面不补播')
+await hostStatusCase('503', '503', 0)
+
+console.log('\n[8] Host 返回 409（已在别处播）：页面不补播')
+await hostStatusCase('409', '409', 0)
+
+console.log('\n[9] Host 请求失败：页面补播 1 次')
+await hostStatusCase('reject', 'reject', 1)
 
 console.log(failed === 0 ? '\nRESULT: ALL OK' : `\nRESULT: ${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

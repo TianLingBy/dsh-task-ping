@@ -44,23 +44,35 @@ window.__ModuleLoader__.load({
     // communications endpoint (Control Panel -> Sound -> Communications -> "reduce
     // by 50%"). The browser cannot render there, so the sound is handed to the Host
     // half (route -> play-comm.ps1 -> WASAPI eCommunications). Nothing here lowers
-    // anyone else's volume. If the Host cannot play it, this page plays it instead:
-    // no ducking, but the notification is still audible.
+    // anyone else's volume.
+    //
+    // The Host answers three ways and they must NOT be treated alike:
+    //   204 -> played on the communications endpoint (ducked and synced)
+    //   409 -> played, but the device could not be synced; still exactly one sound
+    //   503 -> busy playing the previous sound; a second copy would double it
+    // Only a real transport failure (no route, fetch rejected) falls back to the page.
+    // Treating 503/409 as failures is what made repeated clicks alternate loudness:
+    // one click came from the Host, the next from the page, and the two differ.
     const HOST_PLAY_TIMEOUT_MS = 1600
+    /** The bundled chime is ~2.15 s; anything inside this window is the same play. */
+    const PLAY_GUARD_MS = 2300
+    let lastPlayAt = 0
+
     function hostPlay(dataUrl, volume) {
       return new Promise((resolve) => {
         try {
           if (typeof fetch !== 'function') {
-            resolve(false)
+            resolve('failed')
             return
           }
           let settled = false
-          const settle = (played) => {
+          const settle = (status) => {
             if (settled) return
             settled = true
-            resolve(played)
+            resolve(status)
           }
-          window.setTimeout(() => settle(false), HOST_PLAY_TIMEOUT_MS)
+          // A slow Host is still a playing Host; never double it from the page.
+          window.setTimeout(() => settle('busy'), HOST_PLAY_TIMEOUT_MS)
           const started = fetch('/dsh-task-notify/play', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -68,12 +80,20 @@ window.__ModuleLoader__.load({
             cache: 'no-store',
           })
           if (!started || typeof started.then !== 'function') {
-            settle(false)
+            settle('failed')
             return
           }
-          started.then((res) => settle(!!res && res.ok === true)).catch(() => settle(false))
+          started
+            .then((res) => {
+              if (!res) return settle('failed')
+              if (res.ok === true) return settle('played')
+              if (res.status === 409) return settle('played')
+              if (res.status === 503) return settle('busy')
+              return settle('failed')
+            })
+            .catch(() => settle('failed'))
         } catch {
-          resolve(false)
+          resolve('failed')
         }
       })
     }
@@ -81,6 +101,11 @@ window.__ModuleLoader__.load({
     function playSound(settings) {
       const current = settings || DEFAULT_SETTINGS
       if (current.volume <= 0) return
+      // One sound at a time: clicks inside the sound's own length are the same
+      // request, not a queue — this is what kept the chime ringing repeatedly.
+      const now = Date.now()
+      if (now - lastPlayAt < PLAY_GUARD_MS) return
+      lastPlayAt = now
       const source = current.sound || SOUND
       const level = Math.max(0, Math.min(1, current.volume / 100))
       const local = () => {
@@ -93,8 +118,8 @@ window.__ModuleLoader__.load({
           beep()
         }
       }
-      hostPlay(source, current.volume).then((played) => {
-        if (!played) local()
+      hostPlay(source, current.volume).then((status) => {
+        if (status === 'failed') local()
       })
     }
 
@@ -733,13 +758,13 @@ window.__ModuleLoader__.load({
         setSettings((prev) => ({ ...prev, volume: Number.isFinite(volume) ? volume : 100 }))
       }
 
-      // Persist only. The slider used to preview on release, so every drag ended with
-      // a sound at whatever position the thumb happened to land on — the loudness then
-      // depended on the drag, not on the saved setting. Previewing is now its own
-      // button, which always plays the saved volume.
+      // Release-to-preview, as it always was: the slider commits the value and plays
+      // it once. The double/alternating sound came from the playback path (Host vs
+      // page), not from previewing here — that is fixed in `playSound`.
       const commitVolume = (value) => {
         const volume = Number(value)
-        save({ ...settingsRef.current, volume: Number.isFinite(volume) ? volume : 100 })
+        const next = save({ ...settingsRef.current, volume: Number.isFinite(volume) ? volume : 100 })
+        preview(next)
       }
 
       return h(
@@ -769,16 +794,6 @@ window.__ModuleLoader__.load({
             '选择文件…',
           ),
           h(Button, { disabled: locked, onClick: () => patch({ sound: null }) }, '恢复默认'),
-          h(
-            Button,
-            {
-              disabled: locked,
-              onClick: () => {
-                if (!locked) preview(settingsRef.current)
-              },
-            },
-            '试听',
-          ),
           h('input', {
             ref: fileRef,
             type: 'file',
@@ -790,18 +805,8 @@ window.__ModuleLoader__.load({
         ),
         h(
           Row,
-          { title: '通知音量', description: '拖动只改数值，点「试听」按保存的音量播一次', disabled: locked },
+          { title: '通知音量', description: '松开滑块后按此音量试听', disabled: locked },
           h('span', { style: UI.hint }, settings.volume + '%'),
-          h(
-            Button,
-            {
-              disabled: locked,
-              onClick: () => {
-                if (!locked) preview(settingsRef.current)
-              },
-            },
-            '试听',
-          ),
           h('input', {
             type: 'range',
             min: 0,
@@ -989,7 +994,13 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'uiWorkspace'],
       // Test hook: lets verify-ui.mjs drive `show()` and the settings tree without a
       // browser. Not used by the Host or any other module.
-      __test: { show },
+      __test: {
+        show,
+        // Resets the one-sound-at-a-time guard so tests can replay quickly.
+        resetPlayGuard: () => {
+          lastPlayAt = 0
+        },
+      },
       apply(ctx) {
         ctx.effect(() => {
           const tag = document.createElement('style')
