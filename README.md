@@ -88,6 +88,8 @@ $env:DSH_SMTP_PASS = '你的授权码'
 - **QQ 讨论群**：`1130872026`（DSH通知音效插件讨论群）
 - **一键加群**：<https://qm.qq.com/q/9NMQdv8Emc>
 
+<img src="assets/qq-group.png" width="260" alt="QQ 群二维码：1130872026">
+
 也可以在 GitHub 仓库开 [Issue](https://github.com/TianLingBy/dsh-task-ping/issues) 或 [Discussion](https://github.com/TianLingBy/dsh-task-ping/discussions)。
 
 ## 要求
