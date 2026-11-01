@@ -733,10 +733,13 @@ window.__ModuleLoader__.load({
         setSettings((prev) => ({ ...prev, volume: Number.isFinite(volume) ? volume : 100 }))
       }
 
+      // Persist only. The slider used to preview on release, so every drag ended with
+      // a sound at whatever position the thumb happened to land on — the loudness then
+      // depended on the drag, not on the saved setting. Previewing is now its own
+      // button, which always plays the saved volume.
       const commitVolume = (value) => {
         const volume = Number(value)
-        const next = save({ ...settingsRef.current, volume: Number.isFinite(volume) ? volume : 100 })
-        preview(next)
+        save({ ...settingsRef.current, volume: Number.isFinite(volume) ? volume : 100 })
       }
 
       return h(
@@ -766,6 +769,16 @@ window.__ModuleLoader__.load({
             '选择文件…',
           ),
           h(Button, { disabled: locked, onClick: () => patch({ sound: null }) }, '恢复默认'),
+          h(
+            Button,
+            {
+              disabled: locked,
+              onClick: () => {
+                if (!locked) preview(settingsRef.current)
+              },
+            },
+            '试听',
+          ),
           h('input', {
             ref: fileRef,
             type: 'file',
@@ -777,8 +790,18 @@ window.__ModuleLoader__.load({
         ),
         h(
           Row,
-          { title: '通知音量', description: '松开滑块后按此音量试听', disabled: locked },
+          { title: '通知音量', description: '拖动只改数值，点「试听」按保存的音量播一次', disabled: locked },
           h('span', { style: UI.hint }, settings.volume + '%'),
+          h(
+            Button,
+            {
+              disabled: locked,
+              onClick: () => {
+                if (!locked) preview(settingsRef.current)
+              },
+            },
+            '试听',
+          ),
           h('input', {
             type: 'range',
             min: 0,

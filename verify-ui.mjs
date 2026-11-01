@@ -304,5 +304,57 @@ if (mailedWhenOn.length !== 1) {
   console.log('  PASS: 推送 1 次')
 }
 
+console.log('\n[5] 「试听」按钮：恰好一次播放，且用保存的音量')
+storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 80, sound: null }))
+const snap = await inspect(true)
+fetchCalls.length = 0
+const auditionButtons = snap.buttons.filter((n) => n.props && n.props.children === '试听')
+if (auditionButtons.length === 0) {
+  console.log('  FAIL: 没找到「试听」按钮')
+  failed += 1
+} else {
+  auditionButtons[0].props.onClick()
+  await Promise.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
+  const plays = fetchCalls.filter((call) => call.url.includes('/dsh-task-notify/play'))
+  const volumes = plays.map((call) => {
+    try {
+      return JSON.parse(call.body).volume
+    } catch {
+      return NaN
+    }
+  })
+  console.log(`  「试听」按钮数=${auditionButtons.length}, 播放请求=${plays.length}, volume=${volumes.join(',')}`)
+  if (plays.length !== 1 || volumes[0] !== 80) {
+    console.log('  FAIL: 期望恰好 1 次播放且 volume=80')
+    failed += 1
+  } else {
+    console.log('  PASS: 一次播放，音量与保存值一致')
+  }
+}
+
+console.log('\n[6] 松滑块（onPointerUp）不再触发试听')
+storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 45, sound: null }))
+const sliderSnap = await inspect(true)
+fetchCalls.length = 0
+const slider = sliderSnap.inputs.find((n) => n.props && n.props.type === 'range')
+if (!slider) {
+  console.log('  FAIL: 没找到音量滑块')
+  failed += 1
+} else {
+  slider.props.onPointerUp({ currentTarget: { value: '45' } })
+  slider.props.onKeyUp({ currentTarget: { value: '45' } })
+  await Promise.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
+  const plays = fetchCalls.filter((call) => call.url.includes('/dsh-task-notify/play'))
+  console.log(`  松手/松键后播放请求=${plays.length}`)
+  if (plays.length !== 0) {
+    console.log('  FAIL: 滑块仍然自动试听')
+    failed += 1
+  } else {
+    console.log('  PASS: 不再自动试听')
+  }
+}
+
 console.log(failed === 0 ? '\nRESULT: ALL OK' : `\nRESULT: ${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)
