@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-task-notify',
+  id: 'dsh-task-ping',
   factory(require) {
     const React = require('react')
 
