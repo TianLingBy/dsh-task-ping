@@ -1,4 +1,4 @@
-﻿# Play the notification sound on the *communications* render endpoint so Windows
+# Play the notification sound on the *communications* render endpoint so Windows
 # ducks other applications by itself.
 #
 # Windows already owns "lower other media by 50% while a communication is active"
@@ -65,6 +65,28 @@ public static class DshAudioComm
     const uint AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = 0x80000000;
     const uint AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY = 0x08000000;
     const long BUFFER_DURATION = 2000000; // 200 ms
+
+    // A preview must be replaceable: the caller starts a new sound while the previous
+    // one is still ringing (volume slider), and waiting for it to finish is what made
+    // repeated clicks feel delayed and out of sync. `Stop` flips this flag and the
+    // playing thread exits its loops at the next check, then the stream is closed in
+    // `finally`, so Windows un-ducks immediately.
+    private static volatile bool _stop;
+    public static void Stop() { _stop = true; }
+    public static bool IsStopping() { return _stop; }
+
+    /// <summary>Run Play on a background thread so the caller keeps reading commands.</summary>
+    public static System.Threading.Thread Start(string wavPath, double volume, int maxMs, string ackPath, int seq, bool syncComm)
+    {
+        var thread = new System.Threading.Thread(() =>
+        {
+            try { Play(wavPath, volume, maxMs, ackPath, seq, syncComm); }
+            catch (Exception ex) { try { WriteAck(ackPath, seq, false, ex.Message); } catch { } }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        return thread;
+    }
 
     [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
     class MMDeviceEnumeratorComObject { }
@@ -268,6 +290,7 @@ public static class DshAudioComm
     // Windows unducks immediately even when a step throws.
     public static string Play(string wavPath, double volume, int maxMs, string ackPath, int seq, bool syncComm)
     {
+        _stop = false;
         var started = DateTime.UtcNow;
         // Best effort and never fatal: if the device cannot be moved the sound still
         // plays where it used to, only without ducking.
@@ -364,6 +387,7 @@ public static class DshAudioComm
 
             while (written < totalFrames)
             {
+                if (_stop) break;
                 uint padding;
                 if (client.GetCurrentPadding(out padding) != 0) break;
                 uint avail = bufferFrames > padding ? bufferFrames - padding : 0;
@@ -390,6 +414,7 @@ public static class DshAudioComm
             // Drain the engine buffer so the very end is audible; still bounded.
             while ((DateTime.UtcNow - started).TotalMilliseconds < maxMs + 1000)
             {
+                if (_stop) break;
                 uint padding;
                 if (client.GetCurrentPadding(out padding) != 0) break;
                 if (padding == 0) break;
@@ -443,6 +468,20 @@ function Invoke-Play([string]$file, [double]$vol, [int]$seq) {
   return [DshAudioComm]::Play($file, $vol, $MaxMs, $AckFile, $seq, $sync)
 }
 
+# Same preparation as Invoke-Play, but starts the sound on a worker thread so the
+# Serve loop can keep reading commands and cut it short for the next preview.
+function Start-Play([string]$file, [double]$vol, [int]$seq) {
+  if (-not $file -or -not (Test-Path -LiteralPath $file)) {
+    throw "wav file missing: $file"
+  }
+  if ($vol -lt 0) { $vol = 0 }
+  if ($vol -gt 1) { $vol = 1 }
+  if ($MaxMs -le 0) { $MaxMs = 4000 }
+  if ($MaxMs -gt 5000) { $MaxMs = 5000 }
+  $sync = if ($SyncComm -lt 0) { $Action -eq 'Serve' } else { $SyncComm -eq 1 }
+  return [DshAudioComm]::Start($file, $vol, $MaxMs, $AckFile, $seq, $sync)
+}
+
 # A play failure must always be reported to the Host, otherwise the page waits for
 # an ack that never comes and would stay silent.
 function Fail-Ack([int]$seq, [string]$message) {
@@ -494,6 +533,7 @@ try {
       $lastCommand = Get-Date
       $ticks = 0
       $running = $true
+      $playThread = $null
       try {
         while ($running) {
           $cmd = $null
@@ -517,15 +557,24 @@ try {
                 try { $vol = [double]$cmd.volume } catch {}
                 if ($vol -gt 1) { $vol = $vol / 100.0 }
                 try {
-                  $report = Invoke-Play ([string]$cmd.wav) $vol $seq
-                  Write-Log $report
+                  # New sounds replace the one that is ringing: stop it, let the thread
+                  # close its stream (so ducking is released), then start the new one.
+                  [DshAudioComm]::Stop()
+                  if ($playThread -and $playThread.IsAlive) { [void]$playThread.Join(600) }
+                  $playThread = Start-Play ([string]$cmd.wav) $vol $seq
+                  Write-Log ("play seq=" + $seq + " volume=" + $vol.ToString('0.00'))
                 } catch {
                   $msg = $_.Exception.Message
                   Fail-Ack $seq $msg
                   Write-Log ("play failed: " + $msg)
                 }
               }
-              'exit' { Write-Log 'exit requested'; $running = $false }
+              'drop' {
+                [DshAudioComm]::Stop()
+                if ($playThread -and $playThread.IsAlive) { [void]$playThread.Join(300) }
+                Write-Log 'drop requested'
+              }
+              'exit' { [DshAudioComm]::Stop(); Write-Log 'exit requested'; $running = $false }
             }
           }
 

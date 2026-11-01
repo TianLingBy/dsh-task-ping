@@ -54,9 +54,6 @@ window.__ModuleLoader__.load({
     // Treating 503/409 as failures is what made repeated clicks alternate loudness:
     // one click came from the Host, the next from the page, and the two differ.
     const HOST_PLAY_TIMEOUT_MS = 1600
-    /** The bundled chime is ~2.15 s; anything inside this window is the same play. */
-    const PLAY_GUARD_MS = 2300
-    let lastPlayAt = 0
 
     function hostPlay(dataUrl, volume) {
       return new Promise((resolve) => {
@@ -101,11 +98,10 @@ window.__ModuleLoader__.load({
     function playSound(settings) {
       const current = settings || DEFAULT_SETTINGS
       if (current.volume <= 0) return
-      // One sound at a time: clicks inside the sound's own length are the same
-      // request, not a queue — this is what kept the chime ringing repeatedly.
-      const now = Date.now()
-      if (now - lastPlayAt < PLAY_GUARD_MS) return
-      lastPlayAt = now
+      // Every request plays: the Host stops whatever is ringing and starts this one, so
+      // a click during the previous chime is heard right away at the new volume. The
+      // old one-sound guard is gone — it was what made repeated clicks silent and then
+      // loud again at an unrelated volume.
       const source = current.sound || SOUND
       const level = Math.max(0, Math.min(1, current.volume / 100))
       const local = () => {
@@ -996,10 +992,6 @@ window.__ModuleLoader__.load({
       // browser. Not used by the Host or any other module.
       __test: {
         show,
-        // Resets the one-sound-at-a-time guard so tests can replay quickly.
-        resetPlayGuard: () => {
-          lastPlayAt = 0
-        },
       },
       apply(ctx) {
         ctx.effect(() => {

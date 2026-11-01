@@ -338,7 +338,6 @@ function countPlays() {
 console.log('\n[5] 松滑块：还原的自动试听，恰好一次且用保存的音量')
 storage.set('dsh-task-notify/settings', JSON.stringify({ enabled: true, volume: 45, sound: null }))
 const sliderSnap = await inspect(true)
-factory.__test.resetPlayGuard()
 fetchCalls.length = 0
 localPlays.length = 0
 const slider = sliderSnap.inputs.find((n) => n.props && n.props.type === 'range')
@@ -365,22 +364,21 @@ if (!slider) {
   }
 }
 
-console.log('\n[6] 快速连点 3 次：只播 1 次（单次播放守卫）')
-factory.__test.resetPlayGuard()
+console.log('\n[6] 快速连点 3 次：每次都播（Host 会打断上一声）')
 fetchCalls.length = 0
 localPlays.length = 0
 for (let i = 0; i < 3; i += 1) slider.props.onPointerUp({ currentTarget: { value: '45' } })
 await tick()
-console.log(`  3 次操作 -> 播放请求=${countPlays().length}, 页面补播=${localPlays.length}`)
-if (countPlays().length !== 1) {
-  console.log('  FAIL: 期望仍只有 1 次播放')
+const burst = countPlays().length
+console.log(`  3 次操作 -> 播放请求=${burst}, 页面补播=${localPlays.length}`)
+if (burst !== 3) {
+  console.log('  FAIL: 期望 3 次操作产生 3 次播放请求')
   failed += 1
 } else {
-  console.log('  PASS: 未叠加')
+  console.log('  PASS: 三次点击都发出播放请求，且没有页面补播')
 }
 
 async function hostStatusCase(label, behavior, expectLocal) {
-  factory.__test.resetPlayGuard()
   fetchCalls.length = 0
   localPlays.length = 0
   playBehavior = behavior

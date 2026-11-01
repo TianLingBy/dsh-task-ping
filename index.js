@@ -407,13 +407,6 @@ function registerRoutes(ctx) {
     return { ok: false, raw: '' }
   }
 
-  /**
-   * The helper plays one sound at a time and a command left unread can be replaced,
-   * so a second notification arriving during playback is answered non-2xx at once:
-   * the page rings it locally instead of risking a duplicate a few hundred ms later.
-   */
-  let busyUntil = 0
-
   const dispose = webServer.register({
     kind: 'exact',
     path: ROUTE,
@@ -433,46 +426,31 @@ function registerRoutes(ctx) {
         if (!Number.isFinite(volume)) volume = 1
         if (volume > 1) volume = volume / 100
         volume = Math.max(0, Math.min(1, volume))
-        if (Date.now() < busyUntil) {
-          res.writeHead(503, { 'cache-control': 'no-store', 'retry-after': '1' })
-          return
-        }
-        // Claim the helper before the (async) ack wait so a second request cannot slip in.
-        busyUntil = Date.now() + MAX_MS + 500
 
         mkdirSync(DIR, { recursive: true })
         const file = join(DIR, `play-${Date.now()}-${++files}.wav`)
         writeFileSync(file, wav)
         prune()
         ensureHelper()
+        // A new sound replaces whatever is ringing: the helper stops the current
+        // stream before starting this one, so previewing at a different volume is
+        // heard immediately instead of after the previous chime ends.
         const mine = send({ op: 'play', wav: file, volume: Number(volume.toFixed(3)) })
         const ack = await waitAck(mine)
         if (ack.ok) {
-          // Hold the helper for the sound's own length (frames / sample rate) so a
-          // follow-up notification never queues behind it and doubles the sound.
-          const rate = /format=(\d+)Hz/.exec(ack.raw)
-          const frames = / frames=(\d+)/.exec(ack.raw)
-          const soundMs = rate && frames ? (Number(frames[1]) * 1000) / Number(rate[1]) : MAX_MS
-          busyUntil = Date.now() + Math.min(MAX_MS, Math.max(100, soundMs)) + 250
           // The helper renders on the *communications* endpoint, and with -SyncComm it
           // first moves that default onto the current playback default, so the sound is
           // heard where the user listens and Windows ducks the same endpoint. A failed
-          // move (sameDevice=0) still means the sound went somewhere else, so the page
-          // rings it locally: answer 409 instead of 204.
+          // move (sameDevice=0) still means the sound went somewhere else; 409 says
+          // "played, not synced" so the page does not add a second copy.
           const heard = /sameDevice=1/.test(ack.raw)
-          if (heard) {
-            res.writeHead(204, { 'cache-control': 'no-store' })
-          } else {
-            res.writeHead(409, { 'cache-control': 'no-store' })
-          }
+          res.writeHead(heard ? 204 : 409, { 'cache-control': 'no-store' })
         } else {
-          // Tell a late helper to drop a command the page already covered itself.
-          send({ op: 'drop' })
-          busyUntil = Date.now() + 400
+          // The helper did not confirm in time; do not drop the command (it may still
+          // be starting) and let the page stay silent rather than double the sound.
           res.writeHead(503, { 'cache-control': 'no-store' })
         }
       } catch {
-        busyUntil = Date.now() + 400
         try {
           res.writeHead(503, { 'cache-control': 'no-store' })
         } catch {}
