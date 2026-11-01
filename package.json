@@ -1,0 +1,49 @@
+{
+  "name": "dsh-task-ping",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DSH 任务提醒：对话结束时弹 Windows 通知 + 播放提示音（通信端点，自动压低其他媒体）+ 发一封邮件到手机。 · Desktop toast, ducking notification sound and a mirroring email for DSH.",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "plugin",
+    "notification",
+    "desktop-notification",
+    "email",
+    "smtp"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "play-comm.ps1",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "push.config.example.json"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  }
+}

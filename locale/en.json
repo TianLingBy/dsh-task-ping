@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task Done Ping",
+    "description": "Toast and ducking chime when a chat turn finishes, plus an optional email copy to your phone."
+  }
+}

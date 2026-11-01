@@ -1,0 +1,5 @@
+# 本机账号文件，绝不进包、不进仓库
+push.config.json
+node_modules/
+*.tgz
+*.log
