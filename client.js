@@ -132,6 +132,9 @@ window.__ModuleLoader__.load({
     // question); the turn-finished call passes none and keeps the old copy.
     function show(sessionId, summary, ctx, notice) {
       const settings = readSettings()
+      // Master switch: when it is off nothing leaves the app at all — no toast, no
+      // sound, no mail. The mail switch is a sub-option of this one, not a parallel one.
+      if (!settings.enabled) return
       const custom = notice && typeof notice === 'object' ? notice : null
       const title =
         custom && typeof custom.title === 'string' && custom.title.trim() ? custom.title.trim() : TITLE
@@ -143,8 +146,6 @@ window.__ModuleLoader__.load({
           ? `已完成：${summary.trim()}`
           : BODY
       // Mirror the notice to the phone through the Host, which owns the SMTP account.
-      // This runs even when the desktop notification is switched off: the two channels
-      // have their own switches, and someone may want mail only.
       // Fire and forget: a slow or unreachable mail server must never delay the toast
       // or the sound, and a Host with no account just answers 204.
       try {
@@ -158,7 +159,6 @@ window.__ModuleLoader__.load({
           if (posted && typeof posted.catch === 'function') posted.catch(() => {})
         }
       } catch {}
-      if (!settings.enabled) return
       try {
         if (typeof Notification === 'undefined') {
           playSound(settings)
@@ -292,7 +292,7 @@ window.__ModuleLoader__.load({
       const h = React.createElement
       return h(
         'div',
-        { style: UI.section },
+        { style: props.disabled ? { ...UI.section, opacity: 0.5 } : UI.section },
         h(
           'div',
           { style: { minWidth: 0 } },
@@ -307,16 +307,17 @@ window.__ModuleLoader__.load({
     function Button(props) {
       const h = React.createElement
       const [hover, setHover] = React.useState(false)
+      const disabled = props.disabled === true
+      const base = disabled ? { ...UI.button, opacity: 0.5, cursor: 'default' } : UI.button
       return h(
         'button',
         {
           type: 'button',
-          onClick: props.onClick,
-          onMouseEnter: () => setHover(true),
+          disabled,
+          onClick: disabled ? undefined : props.onClick,
+          onMouseEnter: () => setHover(!disabled),
           onMouseLeave: () => setHover(false),
-          style: hover
-            ? { ...UI.button, background: 'var(--dsw-alias-interactive-bg-hover)' }
-            : UI.button,
+          style: hover && !disabled ? { ...base, background: 'var(--dsw-alias-interactive-bg-hover)' } : base,
         },
         props.children,
       )
@@ -327,6 +328,7 @@ window.__ModuleLoader__.load({
     function Switch(props) {
       const h = React.createElement
       const checked = props.checked === true
+      const disabled = props.disabled === true
       return h(
         'button',
         {
@@ -335,8 +337,11 @@ window.__ModuleLoader__.load({
           className: 'dtn-switch',
           'aria-checked': checked,
           'aria-label': props.label,
-          disabled: props.disabled,
-          onClick: () => props.onChange && props.onChange(!checked),
+          disabled,
+          onClick: () => {
+            if (disabled) return
+            if (props.onChange) props.onChange(!checked)
+          },
           style: {
             boxSizing: 'border-box',
             position: 'relative',
@@ -349,8 +354,8 @@ window.__ModuleLoader__.load({
             background: checked
               ? 'var(--dsw-alias-brand-primary)'
               : 'var(--dsw-alias-border-l3, var(--dsw-alias-border-l2))',
-            cursor: props.disabled ? 'default' : 'pointer',
-            opacity: props.disabled ? 0.5 : 1,
+            cursor: disabled ? 'default' : 'pointer',
+            opacity: disabled ? 0.5 : 1,
           },
         },
         h('span', {
@@ -420,18 +425,23 @@ window.__ModuleLoader__.load({
 
     function MailField(props) {
       const h = React.createElement
+      const disabled = props.disabled === true
       return h(
         'label',
-        { style: UI.field },
+        { style: disabled ? { ...UI.field, opacity: 0.5 } : UI.field },
         h('span', { style: UI.label }, props.label),
         h('input', {
           type: props.type || 'text',
           value: props.value,
           placeholder: props.placeholder,
-          style: UI.input,
+          disabled,
+          style: disabled ? { ...UI.input, cursor: 'default' } : UI.input,
           autoComplete: 'off',
           spellCheck: false,
-          onChange: (event) => props.onChange(event.currentTarget.value),
+          onChange: (event) => {
+            if (disabled) return
+            if (props.onChange) props.onChange(event.currentTarget.value)
+          },
         }),
       )
     }
@@ -439,8 +449,9 @@ window.__ModuleLoader__.load({
     // Settings form for the mail mirror. Everything is stored by the Host in
     // `~/.dsh/dsh-task-notify-push.json`; this page only reads and posts to it, so
     // nothing sensitive ends up in localStorage.
-    function MailSettings() {
+    function MailSettings(props) {
       const h = React.createElement
+      const locked = props && props.disabled === true
       const [draft, setDraft] = React.useState(null)
       const [saved, setSaved] = React.useState(null)
       const [busy, setBusy] = React.useState('')
@@ -521,15 +532,20 @@ window.__ModuleLoader__.load({
 
       const header = h(
         'div',
-        { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
+        { style: locked ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, opacity: 0.5 } : { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
         h(
           'div',
           { style: { minWidth: 0 } },
           h('div', { style: UI.title }, '邮件推送'),
-          h('div', { style: UI.description }, '同一份提醒再发一封邮件到手机，人不在电脑前也能看到'),
+          h(
+            'div',
+            { style: UI.description },
+            locked ? '总开关关闭时，所有通知（含邮件）都会停用' : '同一份提醒再发一封邮件到手机，人不在电脑前也能看到',
+          ),
         ),
         h(Switch, {
           checked: draft.enabled === true,
+          disabled: locked,
           label: '启用邮件推送',
           onChange: (enabled) => {
             patch({ enabled })
@@ -544,7 +560,7 @@ window.__ModuleLoader__.load({
       const body = open
         ? h(
             'div',
-            { style: UI.form },
+            { style: locked ? { ...UI.form, opacity: 0.5 } : UI.form },
             h(
               'label',
               { style: UI.field },
@@ -552,9 +568,11 @@ window.__ModuleLoader__.load({
               h(
                 'select',
                 {
-                  style: UI.input,
+                  disabled: locked,
+                  style: locked ? { ...UI.input, cursor: 'default' } : UI.input,
                   value: presetId,
                   onChange: (event) => {
+                    if (locked) return
                     const picked = MAIL_PRESETS.find((item) => item.id === event.currentTarget.value)
                     if (picked && picked.host) {
                       patch({ host: picked.host, port: picked.port, secure: picked.secure })
@@ -571,6 +589,7 @@ window.__ModuleLoader__.load({
                 'div',
                 { style: { flex: '2 1 0' } },
                 h(MailField, {
+                  disabled: locked,
                   label: 'SMTP 服务器',
                   value: draft.host,
                   placeholder: 'smtp.qq.com',
@@ -581,6 +600,7 @@ window.__ModuleLoader__.load({
                 'div',
                 { style: { flex: '1 1 0' } },
                 h(MailField, {
+                  disabled: locked,
                   label: '端口',
                   value: String(draft.port || 465),
                   placeholder: '465',
@@ -589,6 +609,7 @@ window.__ModuleLoader__.load({
               ),
             ),
             h(MailField, {
+              disabled: locked,
               label: '发件邮箱（填完自动识别服务商）',
               value: draft.user,
               placeholder: 'you@qq.com',
@@ -609,8 +630,13 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    style: { ...UI.button, height: 20, padding: '0 6px', fontSize: 11 },
-                    onClick: () => setShowPass(!showPass),
+                    disabled: locked,
+                    style: locked
+                      ? { ...UI.button, height: 20, padding: '0 6px', fontSize: 11, opacity: 0.5, cursor: 'default' }
+                      : { ...UI.button, height: 20, padding: '0 6px', fontSize: 11 },
+                    onClick: () => {
+                      if (!locked) setShowPass(!showPass)
+                    },
                   },
                   showPass ? '隐藏' : '显示',
                 ),
@@ -618,20 +644,25 @@ window.__ModuleLoader__.load({
               h('input', {
                 type: showPass ? 'text' : 'password',
                 value: draft.pass,
-                style: UI.input,
+                disabled: locked,
+                style: locked ? { ...UI.input, cursor: 'default' } : UI.input,
                 autoComplete: 'off',
                 spellCheck: false,
-                onChange: (event) => patch({ pass: event.currentTarget.value }),
+                onChange: (event) => {
+                  if (!locked) patch({ pass: event.currentTarget.value })
+                },
               }),
               h('span', { style: UI.label }, '不想把授权码写进文件？填 env:DSH_SMTP_PASS，改为从环境变量读取'),
             ),
             h(MailField, {
+              disabled: locked,
               label: '收件邮箱（留空则发到发件邮箱）',
               value: draft.to,
               placeholder: 'you@qq.com',
               onChange: (v) => patch({ to: v }),
             }),
             h(MailField, {
+              disabled: locked,
               label: '发件人名称',
               value: draft.fromName,
               placeholder: 'DSH',
@@ -640,8 +671,8 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-              h(Button, { onClick: save }, busy === 'save' ? '保存中…' : '保存'),
-              h(Button, { onClick: test }, busy === 'test' ? '发送中…' : '发送测试邮件'),
+              h(Button, { disabled: locked, onClick: save }, busy === 'save' ? '保存中…' : '保存'),
+              h(Button, { disabled: locked, onClick: test }, busy === 'test' ? '发送中…' : '发送测试邮件'),
               saved && saved.enabled
                 ? h('span', { style: UI.hint }, '当前：已启用')
                 : h('span', { style: UI.hint }, '当前：未启用'),
@@ -675,6 +706,8 @@ window.__ModuleLoader__.load({
       }
 
       const patch = (changes) => save({ ...settingsRef.current, ...changes })
+      // The master switch turns every channel off and locks the sub-rows.
+      const locked = settings.enabled !== true
 
       const onFileChange = (event) => {
         const input = event.currentTarget
@@ -711,7 +744,7 @@ window.__ModuleLoader__.load({
         null,
         h(
           Row,
-          { title: '任务完成通知', description: '一轮对话结束时弹出系统通知，点击通知可回到该会话' },
+          { title: '任务完成通知', description: '总开关：关闭后弹窗、提示音和邮件推送全部停用，下面的选项也会锁定' },
           h(Switch, {
             checked: settings.enabled,
             label: '启用任务完成通知',
@@ -720,28 +753,31 @@ window.__ModuleLoader__.load({
         ),
         h(
           Row,
-          { title: '通知音效', description: settings.sound ? '自定义音频' : SOUND_NAME },
+          { title: '通知音效', description: settings.sound ? '自定义音频' : SOUND_NAME, disabled: locked },
           h(
             Button,
             {
+              disabled: locked,
               onClick: () => {
+                if (locked) return
                 if (fileRef.current) fileRef.current.click()
               },
             },
             '选择文件…',
           ),
-          h(Button, { onClick: () => patch({ sound: null }) }, '恢复默认'),
+          h(Button, { disabled: locked, onClick: () => patch({ sound: null }) }, '恢复默认'),
           h('input', {
             ref: fileRef,
             type: 'file',
             accept: 'audio/*',
+            disabled: locked,
             onChange: onFileChange,
             style: { display: 'none' },
           }),
         ),
         h(
           Row,
-          { title: '通知音量', description: '松开滑块后按此音量试听' },
+          { title: '通知音量', description: '松开滑块后按此音量试听', disabled: locked },
           h('span', { style: UI.hint }, settings.volume + '%'),
           h('input', {
             type: 'range',
@@ -751,14 +787,19 @@ window.__ModuleLoader__.load({
             value: settings.volume,
             className: 'dtn-range',
             'aria-label': '通知音效音量',
+            disabled: locked,
             onChange: changeVolume,
-            onPointerUp: (event) => commitVolume(event.currentTarget.value),
-            onKeyUp: (event) => commitVolume(event.currentTarget.value),
+            onPointerUp: (event) => {
+              if (!locked) commitVolume(event.currentTarget.value)
+            },
+            onKeyUp: (event) => {
+              if (!locked) commitVolume(event.currentTarget.value)
+            },
             style: { '--dtn-fill': settings.volume + '%' },
           }),
         ),
         notice ? h('div', { style: UI.noticeBox }, notice) : null,
-        h(MailSettings, null),
+        h(MailSettings, { disabled: locked }),
       )
     }
 
@@ -923,6 +964,9 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots', 'uiWorkspace'],
+      // Test hook: lets verify-ui.mjs drive `show()` and the settings tree without a
+      // browser. Not used by the Host or any other module.
+      __test: { show },
       apply(ctx) {
         ctx.effect(() => {
           const tag = document.createElement('style')
