@@ -132,7 +132,6 @@ window.__ModuleLoader__.load({
     // question); the turn-finished call passes none and keeps the old copy.
     function show(sessionId, summary, ctx, notice) {
       const settings = readSettings()
-      if (!settings.enabled) return
       const custom = notice && typeof notice === 'object' ? notice : null
       const title =
         custom && typeof custom.title === 'string' && custom.title.trim() ? custom.title.trim() : TITLE
@@ -144,8 +143,10 @@ window.__ModuleLoader__.load({
           ? `已完成：${summary.trim()}`
           : BODY
       // Mirror the notice to the phone through the Host, which owns the SMTP account.
+      // This runs even when the desktop notification is switched off: the two channels
+      // have their own switches, and someone may want mail only.
       // Fire and forget: a slow or unreachable mail server must never delay the toast
-      // or the sound, and a Host without `push.config.json` just answers 204.
+      // or the sound, and a Host with no account just answers 204.
       try {
         if (typeof fetch === 'function') {
           const posted = fetch('/dsh-task-notify/push', {
@@ -157,6 +158,7 @@ window.__ModuleLoader__.load({
           if (posted && typeof posted.catch === 'function') posted.catch(() => {})
         }
       } catch {}
+      if (!settings.enabled) return
       try {
         if (typeof Notification === 'undefined') {
           playSound(settings)
@@ -382,6 +384,31 @@ window.__ModuleLoader__.load({
       to: '',
     }
 
+    // Common providers: picking one fills host/port/TLS so nobody has to remember
+    // whether QQ wants 465 or 587. `secure: false` means STARTTLS on 587.
+    const MAIL_PRESETS = [
+      { id: 'qq', label: 'QQ 邮箱', host: 'smtp.qq.com', port: 465, secure: true, domains: ['qq.com', 'vip.qq.com', 'foxmail.com'] },
+      { id: '163', label: '网易 163', host: 'smtp.163.com', port: 465, secure: true, domains: ['163.com'] },
+      { id: '126', label: '网易 126', host: 'smtp.126.com', port: 465, secure: true, domains: ['126.com'] },
+      { id: 'exmail', label: '腾讯企业邮箱', host: 'smtp.exmail.qq.com', port: 465, secure: true, domains: ['exmail.qq.com'] },
+      { id: 'outlook', label: 'Outlook / Hotmail', host: 'smtp-mail.outlook.com', port: 587, secure: false, domains: ['outlook.com', 'hotmail.com', 'live.com', 'msn.com'] },
+      { id: 'gmail', label: 'Gmail', host: 'smtp.gmail.com', port: 465, secure: true, domains: ['gmail.com', 'googlemail.com'] },
+      { id: 'custom', label: '自定义', host: '', port: 465, secure: true, domains: [] },
+    ]
+
+    function presetForEmail(email) {
+      const domain = String(email || '').split('@')[1]
+      if (!domain || domain.indexOf('.') < 0) return null
+      const wanted = domain.trim().toLowerCase()
+      return MAIL_PRESETS.find((item) => item.domains.includes(wanted)) || null
+    }
+
+    function presetForHost(host) {
+      const wanted = String(host || '').trim().toLowerCase()
+      if (!wanted) return null
+      return MAIL_PRESETS.find((item) => item.host === wanted) || null
+    }
+
     function postJson(route, payload) {
       return fetch(route, {
         method: 'POST',
@@ -419,6 +446,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState('')
       const [message, setMessage] = React.useState(null)
       const [open, setOpen] = React.useState(false)
+      const [showPass, setShowPass] = React.useState(false)
       const draftRef = React.useRef(null)
       draftRef.current = draft
 
@@ -461,7 +489,11 @@ window.__ModuleLoader__.load({
           .then((json) => {
             if (json && json.ok) {
               setSaved(draftRef.current)
-              setMessage({ kind: 'ok', text: '已保存，下一封通知就按新配置发' })
+              setMessage(
+                json.warning
+                  ? { kind: 'err', text: '已保存，但 ' + json.warning }
+                  : { kind: 'ok', text: '已保存，下一封通知就按新配置发' },
+              )
             } else {
               setMessage({ kind: 'err', text: (json && json.error) || '保存失败' })
             }
@@ -506,39 +538,104 @@ window.__ModuleLoader__.load({
         }),
       )
 
+      const preset = presetForHost(draft.host)
+      const presetId = preset ? preset.id : 'custom'
+
       const body = open
         ? h(
             'div',
             { style: UI.form },
+            h(
+              'label',
+              { style: UI.field },
+              h('span', { style: UI.label }, '邮箱类型（选中后自动填服务器和端口）'),
+              h(
+                'select',
+                {
+                  style: UI.input,
+                  value: presetId,
+                  onChange: (event) => {
+                    const picked = MAIL_PRESETS.find((item) => item.id === event.currentTarget.value)
+                    if (picked && picked.host) {
+                      patch({ host: picked.host, port: picked.port, secure: picked.secure })
+                    }
+                  },
+                },
+                MAIL_PRESETS.map((item) => h('option', { key: item.id, value: item.id }, item.label)),
+              ),
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', gap: 10 } },
+              h(
+                'div',
+                { style: { flex: '2 1 0' } },
+                h(MailField, {
+                  label: 'SMTP 服务器',
+                  value: draft.host,
+                  placeholder: 'smtp.qq.com',
+                  onChange: (v) => patch({ host: v }),
+                }),
+              ),
+              h(
+                'div',
+                { style: { flex: '1 1 0' } },
+                h(MailField, {
+                  label: '端口',
+                  value: String(draft.port || 465),
+                  placeholder: '465',
+                  onChange: (v) => patch({ port: v }),
+                }),
+              ),
+            ),
             h(MailField, {
-              label: 'SMTP 服务器',
-              value: draft.host,
-              placeholder: 'smtp.qq.com',
-              onChange: (v) => patch({ host: v }),
-            }),
-            h(MailField, {
-              label: '端口',
-              value: String(draft.port || 465),
-              placeholder: '465',
-              onChange: (v) => patch({ port: v }),
-            }),
-            h(MailField, {
-              label: '发件邮箱',
+              label: '发件邮箱（填完自动识别服务商）',
               value: draft.user,
               placeholder: 'you@qq.com',
-              onChange: (v) => patch({ user: v }),
+              onChange: (v) => {
+                const guess = presetForEmail(v)
+                if (guess && guess.host) patch({ user: v, host: guess.host, port: guess.port, secure: guess.secure })
+                else patch({ user: v })
+              },
             }),
-            h(MailField, {
-              label: '授权码（邮箱设置里生成的，不是登录密码）',
-              type: 'password',
-              value: draft.pass,
-              onChange: (v) => patch({ pass: v }),
-            }),
+            h(
+              'div',
+              { style: UI.field },
+              h(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+                h('span', { style: UI.label }, '授权码（邮箱设置里生成的，不是登录密码）'),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: { ...UI.button, height: 20, padding: '0 6px', fontSize: 11 },
+                    onClick: () => setShowPass(!showPass),
+                  },
+                  showPass ? '隐藏' : '显示',
+                ),
+              ),
+              h('input', {
+                type: showPass ? 'text' : 'password',
+                value: draft.pass,
+                style: UI.input,
+                autoComplete: 'off',
+                spellCheck: false,
+                onChange: (event) => patch({ pass: event.currentTarget.value }),
+              }),
+              h('span', { style: UI.label }, '不想把授权码写进文件？填 env:DSH_SMTP_PASS，改为从环境变量读取'),
+            ),
             h(MailField, {
               label: '收件邮箱（留空则发到发件邮箱）',
               value: draft.to,
               placeholder: 'you@qq.com',
               onChange: (v) => patch({ to: v }),
+            }),
+            h(MailField, {
+              label: '发件人名称',
+              value: draft.fromName,
+              placeholder: 'DSH',
+              onChange: (v) => patch({ fromName: v }),
             }),
             h(
               'div',

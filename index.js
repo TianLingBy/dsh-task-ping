@@ -136,16 +136,31 @@ function readPushConfig() {
   if (!raw.cfg || raw.cfg.enabled === false) return null
   const cfg = raw.cfg
   if (!cfg.host || !cfg.user || !cfg.pass || !cfg.to) return null
+  const pass = resolveSecret(cfg.pass)
+  if (!pass) return null
   return {
     host: String(cfg.host),
     port: Number(cfg.port) || 465,
     secure: cfg.secure !== false,
     user: String(cfg.user),
-    pass: String(cfg.pass),
+    pass,
     from: String(cfg.from || cfg.user),
     fromName: typeof cfg.fromName === 'string' && cfg.fromName.trim() ? cfg.fromName.trim() : 'DSH',
     to: String(cfg.to),
   }
+}
+
+/**
+ * `env:NAME` keeps the authorization code out of the config file: the value is read
+ * from the Host process environment at send time, so the form can show a placeholder
+ * instead of a secret and a leaked config file carries nothing usable.
+ */
+function resolveSecret(value) {
+  const text = String(value == null ? '' : value).trim()
+  const match = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(text)
+  if (!match) return text
+  const fromEnv = process.env[match[1]]
+  return typeof fromEnv === 'string' ? fromEnv : ''
 }
 
 /** First readable account file, plus where it came from (the settings form shows it). */
@@ -597,7 +612,14 @@ function registerRoutes(ctx) {
         }
         writePushConfig(next)
         pushLog(`config saved from settings (enabled=${next.enabled})`)
-        replyJson(res, 200, { ok: true })
+        // An `env:` placeholder is only useful if the variable is actually set; say so
+        // now instead of letting the next notification fail silently.
+        let warning = ''
+        const envName = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(next.pass.trim())
+        if (next.enabled && envName && !process.env[envName[1]]) {
+          warning = `环境变量 ${envName[1]} 当前没有值，发信会失败`
+        }
+        replyJson(res, 200, warning ? { ok: true, warning } : { ok: true })
       } catch (err) {
         replyJson(res, 500, { ok: false, error: String((err && err.message) || err) })
       }
@@ -615,7 +637,14 @@ function registerRoutes(ctx) {
         }
         const cfg = readPushConfig()
         if (!cfg) {
-          replyJson(res, 400, { ok: false, error: '还没有可用的邮件配置（或已被关掉）' })
+          const raw = readRawPushConfig()
+          const envName = raw.cfg && /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(String(raw.cfg.pass || '').trim())
+          const why = envName
+            ? `环境变量 ${envName[1]} 没有值，授权码取不到`
+            : raw.cfg && raw.cfg.enabled === false
+              ? '邮件推送是关着的'
+              : '还没有可用的邮件配置'
+          replyJson(res, 400, { ok: false, error: why })
           return
         }
         const stamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
