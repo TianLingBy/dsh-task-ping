@@ -66,8 +66,11 @@ console.log('\n[2] POST invalid (empty fields)')
 const invalid = await call('/dsh-task-notify/push/config', 'POST', { enabled: true })
 console.log('  status', invalid.status, invalid.json)
 
+// 真实发信那一步的授权码只从环境变量取，绝不写进仓库：
+//   $env:DSH_TEST_PASS = '授权码'; node verify-settings.mjs
+// 没设这个变量时，[6] 会跳过真实发信（其余步骤照常跑）。
 console.log('\n[3] POST valid with a plain pass')
-const saved = await call('/dsh-task-notify/push/config', 'POST', { ...baseConfig, pass: 'REMOVED-SECRET' })
+const saved = await call('/dsh-task-notify/push/config', 'POST', { ...baseConfig, pass: 'dummy-pass-for-save-only' })
 console.log('  status', saved.status, saved.json)
 
 console.log('\n[4] POST pass=env:DSH_PASS_TEST while the variable is unset -> warning')
@@ -79,10 +82,16 @@ console.log('\n[5] POST /push/test with the env var missing -> 400 with a reason
 const missing = await call('/dsh-task-notify/push/test', 'POST')
 console.log('  status', missing.status, missing.json)
 
-console.log('\n[6] set the env var, /push/test again (sends a real mail)')
-process.env.DSH_PASS_TEST = 'REMOVED-SECRET'
-const ok = await call('/dsh-task-notify/push/test', 'POST')
-console.log('  status', ok.status, ok.json)
+const realPass = process.env.DSH_TEST_PASS || ''
+let ok = { status: 0, json: null }
+if (realPass) {
+  console.log('\n[6] set the env var, /push/test again (sends a real mail)')
+  process.env.DSH_PASS_TEST = realPass
+  ok = await call('/dsh-task-notify/push/test', 'POST')
+  console.log('  status', ok.status, ok.json)
+} else {
+  console.log('\n[6] skipped: DSH_TEST_PASS 未设置，跳过真实发信')
+}
 
 console.log('\n[7] GET config returns the env placeholder, not the secret')
 const after = await call('/dsh-task-notify/push/config', 'GET')
@@ -92,15 +101,15 @@ console.log('\n[8] disallowed method')
 const wrong = await call('/dsh-task-notify/push/config', 'PUT')
 console.log('  status', wrong.status, wrong.json)
 
+const mailOk = realPass ? ok.status === 200 && ok.json && ok.json.ok : true
 const allOk =
-  ok.status === 200 &&
-  ok.json &&
-  ok.json.ok &&
+  mailOk &&
   warned.status === 200 &&
   warned.json &&
   typeof warned.json.warning === 'string' &&
   after.json &&
   after.json.config.pass === 'env:DSH_PASS_TEST' &&
-  missing.status === 400
-console.log('\nRESULT:', allOk ? 'ALL OK' : 'SOMETHING FAILED')
+  missing.status === 400 &&
+  saved.status === 200
+console.log('\nRESULT:', allOk ? (realPass ? 'ALL OK (含真实发信)' : 'ALL OK (跳过真实发信)') : 'SOMETHING FAILED')
 process.exit(allOk ? 0 : 1)
