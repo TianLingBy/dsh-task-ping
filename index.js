@@ -132,24 +132,37 @@ const PUSH_CONFIG_LOCAL = join(dirname(fileURLToPath(import.meta.url)), 'push.co
 const PUSH_LOG = join(BOOT_DIR, 'dsh-task-notify-push.log')
 
 function readPushConfig() {
+  const raw = readRawPushConfig()
+  if (!raw.cfg || raw.cfg.enabled === false) return null
+  const cfg = raw.cfg
+  if (!cfg.host || !cfg.user || !cfg.pass || !cfg.to) return null
+  return {
+    host: String(cfg.host),
+    port: Number(cfg.port) || 465,
+    secure: cfg.secure !== false,
+    user: String(cfg.user),
+    pass: String(cfg.pass),
+    from: String(cfg.from || cfg.user),
+    fromName: typeof cfg.fromName === 'string' && cfg.fromName.trim() ? cfg.fromName.trim() : 'DSH',
+    to: String(cfg.to),
+  }
+}
+
+/** First readable account file, plus where it came from (the settings form shows it). */
+function readRawPushConfig() {
   for (const path of [PUSH_CONFIG_USER, PUSH_CONFIG_LOCAL]) {
     try {
       const cfg = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
-      if (!cfg || typeof cfg !== 'object' || cfg.enabled === false) continue
-      if (!cfg.host || !cfg.user || !cfg.pass || !cfg.to) continue
-      return {
-        host: String(cfg.host),
-        port: Number(cfg.port) || 465,
-        secure: cfg.secure !== false,
-        user: String(cfg.user),
-        pass: String(cfg.pass),
-        from: String(cfg.from || cfg.user),
-        fromName: typeof cfg.fromName === 'string' && cfg.fromName.trim() ? cfg.fromName.trim() : 'DSH',
-        to: String(cfg.to),
-      }
+      if (cfg && typeof cfg === 'object') return { cfg, path }
     } catch {}
   }
-  return null
+  return { cfg: null, path: PUSH_CONFIG_USER }
+}
+
+/** The settings form always writes the user-level file, never into the package. */
+function writePushConfig(cfg) {
+  mkdirSync(BOOT_DIR, { recursive: true })
+  writeFileSync(PUSH_CONFIG_USER, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8')
 }
 
 function pushLog(line) {
@@ -521,13 +534,109 @@ function registerRoutes(ctx) {
   })
 
   bootLog('push route registered')
+
+  /* -------------------------------------------------------------------------- *
+   * Settings form: the account is read, written and test-fired from the page.
+   * Writing always targets the user-level file so a package install stays clean.
+   * -------------------------------------------------------------------------- */
+  const CONFIG_ROUTE = '/dsh-task-notify/push/config'
+  const TEST_ROUTE = '/dsh-task-notify/push/test'
+  const replyJson = (res, status, payload) => {
+    try {
+      res.writeHead(status, { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(payload))
+    } catch {}
+  }
+
+  const disposeConfig = webServer.register({
+    kind: 'exact',
+    path: CONFIG_ROUTE,
+    async handler(req, res) {
+      try {
+        const method = (req.method || 'GET').toUpperCase()
+        if (method === 'GET') {
+          const { cfg, path } = readRawPushConfig()
+          replyJson(res, 200, {
+            ok: true,
+            path,
+            config:
+              cfg ||
+              { enabled: false, host: 'smtp.qq.com', port: 465, secure: true, user: '', pass: '', fromName: 'DSH', to: '' },
+          })
+          return
+        }
+        if (method !== 'POST') {
+          replyJson(res, 405, { ok: false, error: 'method not allowed' })
+          return
+        }
+        const body = JSON.parse((await readBody(req)).toString('utf8')) || {}
+        const next = {
+          enabled: body.enabled !== false,
+          host: String(body.host || '').trim(),
+          port: Number(body.port) || 465,
+          secure: body.secure !== false,
+          user: String(body.user || '').trim(),
+          pass: String(body.pass || ''),
+          fromName: String(body.fromName || 'DSH').trim() || 'DSH',
+          to: String(body.to || body.user || '').trim(),
+        }
+        if (next.enabled) {
+          const missing = !next.host
+            ? 'SMTP 服务器不能为空'
+            : !next.user
+              ? '发件邮箱不能为空'
+              : !next.pass
+                ? '授权码不能为空'
+                : !next.to
+                  ? '收件邮箱不能为空'
+                  : ''
+          if (missing) {
+            replyJson(res, 400, { ok: false, error: missing })
+            return
+          }
+        }
+        writePushConfig(next)
+        pushLog(`config saved from settings (enabled=${next.enabled})`)
+        replyJson(res, 200, { ok: true })
+      } catch (err) {
+        replyJson(res, 500, { ok: false, error: String((err && err.message) || err) })
+      }
+    },
+  })
+
+  const disposeTest = webServer.register({
+    kind: 'exact',
+    path: TEST_ROUTE,
+    async handler(req, res) {
+      try {
+        if ((req.method || '').toUpperCase() !== 'POST') {
+          replyJson(res, 405, { ok: false, error: 'method not allowed' })
+          return
+        }
+        const cfg = readPushConfig()
+        if (!cfg) {
+          replyJson(res, 400, { ok: false, error: '还没有可用的邮件配置（或已被关掉）' })
+          return
+        }
+        const stamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+        await enqueueMail(() => sendMail(cfg, 'DSH 测试邮件', `从设置页发起的测试。\n\n时间：${stamp}`))
+        pushLog('test mail sent from settings')
+        replyJson(res, 200, { ok: true, to: cfg.to })
+      } catch (err) {
+        const message = String((err && err.message) || err)
+        pushLog(`test failed | ${message}`)
+        replyJson(res, 500, { ok: false, error: message })
+      }
+    },
+  })
+
   ensureHelper()
   bootLog(`helper spawned pid=${helper && helper.pid}`)
   ctx.on('dispose', () => {
     try {
       send({ op: 'exit' })
     } catch {}
-    for (const dispose of [dispose, disposePush]) {
+    for (const dispose of [dispose, disposePush, disposeConfig, disposeTest]) {
       try {
         dispose()
       } catch {}

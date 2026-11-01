@@ -29,8 +29,13 @@ dsh plugin --profile desktop add dsh-task-ping
 
 ## 邮件推送（可选）
 
-1. 准备一个支持 SMTP 的邮箱（QQ / 163 / 126 都可以），拿到 **授权码**（不是登录密码）。QQ 邮箱：设置 → 账号 → 开启「IMAP/SMTP 服务」→ 短信验证 → 16 位授权码。
-2. 把 `push.config.example.json` 复制成 `%USERPROFILE%\.dsh\dsh-task-notify-push.json`（Windows）或 `~/.dsh/dsh-task-notify-push.json`，填好账号：
+**在设置页里填就行**：设置 → 通用 → 「邮件推送」→ 打开开关 → 填 SMTP 服务器、发件邮箱、授权码、收件邮箱 → **发送测试邮件**验证。
+
+- 账号保存在 `~/.dsh/dsh-task-notify-push.json`，**不会**写进插件目录，也不会进 localStorage。
+- 授权码不是登录密码。QQ 邮箱：设置 → 账号 → 开启「IMAP/SMTP 服务」→ 短信验证 → 16 位授权码。
+- 改完即时生效，不用重启。关掉推送把开关关掉即可。
+
+也可以手动写这个文件（比如批量部署）：
 
 ```json
 {
@@ -44,8 +49,6 @@ dsh plugin --profile desktop add dsh-task-ping
   "to": "you@qq.com"
 }
 ```
-
-3. 改完即时生效，不用重启。关掉推送把 `"enabled"` 改成 `false`。
 
 - `secure: true` → 465 端口，隐式 TLS。
 - `secure: false` → 587/25 端口，自动升级 STARTTLS；服务器不支持 STARTTLS 时**拒绝发信**，不会把授权码明文发出去。

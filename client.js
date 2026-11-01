@@ -265,6 +265,24 @@ window.__ModuleLoader__.load({
       },
       notice: { color: 'var(--dsw-alias-state-error-primary, #d9534f)', fontSize: 12, lineHeight: '18px' },
       noticeBox: { padding: '8px 0' },
+      ok: { color: 'var(--dsw-alias-state-success-primary, #2e7d32)', fontSize: 12, lineHeight: '18px' },
+      field: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 },
+      label: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: '18px' },
+      input: {
+        boxSizing: 'border-box',
+        width: '100%',
+        height: 28,
+        padding: '0 8px',
+        border: '.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l2))',
+        borderRadius: 'var(--dsw-radius-sm, 8px)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        font: 'inherit',
+        fontSize: 12,
+        lineHeight: '18px',
+        outline: 'none',
+      },
+      form: { padding: '4px 0 12px', maxWidth: 420 },
     }
 
     /** One General-style preference row: copy on the left, its control on the right. */
@@ -348,6 +366,198 @@ window.__ModuleLoader__.load({
             transform: checked ? 'translateX(16px)' : 'none',
           },
         }),
+      )
+    }
+
+    const MAIL_CONFIG_ROUTE = '/dsh-task-notify/push/config'
+    const MAIL_TEST_ROUTE = '/dsh-task-notify/push/test'
+    const EMPTY_MAIL = {
+      enabled: false,
+      host: 'smtp.qq.com',
+      port: 465,
+      secure: true,
+      user: '',
+      pass: '',
+      fromName: 'DSH',
+      to: '',
+    }
+
+    function postJson(route, payload) {
+      return fetch(route, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        cache: 'no-store',
+      }).then((res) => res.json().catch(() => ({ ok: false, error: 'HTTP ' + res.status })))
+    }
+
+    function MailField(props) {
+      const h = React.createElement
+      return h(
+        'label',
+        { style: UI.field },
+        h('span', { style: UI.label }, props.label),
+        h('input', {
+          type: props.type || 'text',
+          value: props.value,
+          placeholder: props.placeholder,
+          style: UI.input,
+          autoComplete: 'off',
+          spellCheck: false,
+          onChange: (event) => props.onChange(event.currentTarget.value),
+        }),
+      )
+    }
+
+    // Settings form for the mail mirror. Everything is stored by the Host in
+    // `~/.dsh/dsh-task-notify-push.json`; this page only reads and posts to it, so
+    // nothing sensitive ends up in localStorage.
+    function MailSettings() {
+      const h = React.createElement
+      const [draft, setDraft] = React.useState(null)
+      const [saved, setSaved] = React.useState(null)
+      const [busy, setBusy] = React.useState('')
+      const [message, setMessage] = React.useState(null)
+      const [open, setOpen] = React.useState(false)
+      const draftRef = React.useRef(null)
+      draftRef.current = draft
+
+      React.useEffect(() => {
+        let alive = true
+        try {
+          fetch(MAIL_CONFIG_ROUTE, { cache: 'no-store' })
+            .then((res) => res.json())
+            .then((json) => {
+              if (!alive) return
+              const cfg = { ...EMPTY_MAIL, ...(json && json.config ? json.config : {}) }
+              setSaved(cfg)
+              setDraft(cfg)
+              if (cfg.enabled) setOpen(true)
+            })
+            .catch(() => {
+              if (!alive) return
+              setSaved(EMPTY_MAIL)
+              setDraft(EMPTY_MAIL)
+            })
+        } catch {
+          setSaved(EMPTY_MAIL)
+          setDraft(EMPTY_MAIL)
+        }
+        return () => {
+          alive = false
+        }
+      }, [])
+
+      if (!draft) {
+        return h(Row, { title: '邮件推送', description: '读取配置中…' }, null)
+      }
+
+      const patch = (changes) => setDraft({ ...draftRef.current, ...changes })
+
+      const save = () => {
+        setBusy('save')
+        setMessage(null)
+        postJson(MAIL_CONFIG_ROUTE, draftRef.current)
+          .then((json) => {
+            if (json && json.ok) {
+              setSaved(draftRef.current)
+              setMessage({ kind: 'ok', text: '已保存，下一封通知就按新配置发' })
+            } else {
+              setMessage({ kind: 'err', text: (json && json.error) || '保存失败' })
+            }
+          })
+          .catch((err) => setMessage({ kind: 'err', text: '保存失败：' + err.message }))
+          .finally(() => setBusy(''))
+      }
+
+      const test = () => {
+        setBusy('test')
+        setMessage(null)
+        postJson(MAIL_CONFIG_ROUTE, draftRef.current)
+          .then((json) => {
+            if (!json || !json.ok) throw new Error((json && json.error) || '保存失败')
+            setSaved(draftRef.current)
+            return postJson(MAIL_TEST_ROUTE, {})
+          })
+          .then((json) => {
+            if (json && json.ok) setMessage({ kind: 'ok', text: '测试邮件已发出 → ' + json.to })
+            else setMessage({ kind: 'err', text: (json && json.error) || '发送失败' })
+          })
+          .catch((err) => setMessage({ kind: 'err', text: err.message }))
+          .finally(() => setBusy(''))
+      }
+
+      const header = h(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
+        h(
+          'div',
+          { style: { minWidth: 0 } },
+          h('div', { style: UI.title }, '邮件推送'),
+          h('div', { style: UI.description }, '同一份提醒再发一封邮件到手机，人不在电脑前也能看到'),
+        ),
+        h(Switch, {
+          checked: draft.enabled === true,
+          label: '启用邮件推送',
+          onChange: (enabled) => {
+            patch({ enabled })
+            setOpen(true)
+          },
+        }),
+      )
+
+      const body = open
+        ? h(
+            'div',
+            { style: UI.form },
+            h(MailField, {
+              label: 'SMTP 服务器',
+              value: draft.host,
+              placeholder: 'smtp.qq.com',
+              onChange: (v) => patch({ host: v }),
+            }),
+            h(MailField, {
+              label: '端口',
+              value: String(draft.port || 465),
+              placeholder: '465',
+              onChange: (v) => patch({ port: v }),
+            }),
+            h(MailField, {
+              label: '发件邮箱',
+              value: draft.user,
+              placeholder: 'you@qq.com',
+              onChange: (v) => patch({ user: v }),
+            }),
+            h(MailField, {
+              label: '授权码（邮箱设置里生成的，不是登录密码）',
+              type: 'password',
+              value: draft.pass,
+              onChange: (v) => patch({ pass: v }),
+            }),
+            h(MailField, {
+              label: '收件邮箱（留空则发到发件邮箱）',
+              value: draft.to,
+              placeholder: 'you@qq.com',
+              onChange: (v) => patch({ to: v }),
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              h(Button, { onClick: save }, busy === 'save' ? '保存中…' : '保存'),
+              h(Button, { onClick: test }, busy === 'test' ? '发送中…' : '发送测试邮件'),
+              saved && saved.enabled
+                ? h('span', { style: UI.hint }, '当前：已启用')
+                : h('span', { style: UI.hint }, '当前：未启用'),
+            ),
+            message ? h('div', { style: { paddingTop: 8, ...(message.kind === 'ok' ? UI.ok : UI.notice) } }, message.text) : null,
+          )
+        : null
+
+      return h(
+        'div',
+        { style: { padding: '16px 0', borderBottom: '.5px solid var(--dsw-alias-border-l2)' } },
+        header,
+        body,
       )
     }
 
@@ -451,6 +661,7 @@ window.__ModuleLoader__.load({
           }),
         ),
         notice ? h('div', { style: UI.noticeBox }, notice) : null,
+        h(MailSettings, null),
       )
     }
 
