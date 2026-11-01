@@ -29,8 +29,8 @@
     "icon.svg",
     "README.md",
     "LICENSE",
-    "push.config.example.json"
-    "assets/qq-group.png",
+    "push.config.example.json",
+    "assets/qq-group.png"
   ],
   "publishConfig": {
     "access": "public",
